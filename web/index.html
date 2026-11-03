@@ -60,7 +60,6 @@ header p { margin: 0; color: var(--dim); font-size: 14px; }
 }
 #screen-wrap:fullscreen { border-radius: 0; aspect-ratio: auto; width: 100vw; height: 100vh; }
 #screen-wrap:fullscreen #screen { width: auto; height: 100%; aspect-ratio: 4 / 3; max-width: 100%; }
-#screen-wrap[data-drag] { box-shadow: 0 0 0 3px var(--slime); }
 #screen { width: 100%; height: 100%; display: block; image-rendering: auto; }
 #screen[data-sharp="1"] { image-rendering: pixelated; }
 #screen-wrap:not([data-live]) #screen { visibility: hidden; }
@@ -129,6 +128,27 @@ kbd { font: 600 11px var(--font-mono); background: var(--night); border: 1px sol
   max-width: calc(100vw - 32px); text-align: center; }
 footer { max-width: 1280px; margin: 24px auto 0; color: var(--dim); font-size: 12px; }
 footer code { font-family: var(--font-mono); }
+/* The invite prompt: the whole window is the drop target. */
+#join-drop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center;
+  padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px))
+           max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+  background: rgba(10, 7, 14, 0.92); }
+#join-drop .jd-card { width: min(34rem, 100%); display: grid; gap: 14px; justify-items: center; text-align: center;
+  border: 2px dashed var(--rule); border-radius: 14px; padding: 36px 24px; background: var(--panel); }
+body[data-drag] #join-drop .jd-card { border-color: var(--slime); background: #232b14; }
+body[data-drag] #screen-wrap { box-shadow: 0 0 0 3px var(--slime); }
+.jd-eyebrow { margin: 0; font: 600 12px/1 var(--font-body); letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
+#jd-code { font-family: var(--font-mono); color: var(--slime); letter-spacing: 0.08em; text-transform: none; }
+#join-drop h2 { margin: 0; font: 400 clamp(28px, 5vw, 40px)/1.05 var(--font-display); letter-spacing: 0.03em; color: var(--ink); text-wrap: balance; }
+#join-drop p { margin: 0; color: var(--dim); max-width: 28rem; }
+.jd-arrow { width: 56px; height: 56px; color: var(--slime); }
+.jd-error { color: var(--blood) !important; font-weight: 600; }
+.linklike { background: none; border: 0; color: var(--dim); text-decoration: underline; cursor: pointer; font-size: 13px; padding: 4px; }
+.linklike:hover { color: var(--ink); }
+@media (prefers-reduced-motion: no-preference) {
+  body[data-drag] .jd-arrow { animation: jd-bob 0.8s ease-in-out infinite alternate; }
+  @keyframes jd-bob { from { transform: translateY(-4px); } to { transform: translateY(6px); } }
+}
 @media (prefers-reduced-motion: no-preference) { .btn { transition: border-color 0.15s, filter 0.15s; } }
 </style>
 </head>
@@ -227,6 +247,21 @@ footer code { font-family: var(--font-mono); }
 <footer>
   An unofficial port of the 1993 SNES game. No game data is included; you supply your own ROM. Build <code id="build-id">…</code>.
 </footer>
+
+<div id="join-drop" role="dialog" aria-modal="true" aria-labelledby="jd-title" hidden>
+  <div class="jd-card">
+    <p class="jd-eyebrow">You're invited · room <span id="jd-code"></span></p>
+    <svg class="jd-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v13"/><path d="M6 10l6 6 6-6"/><path d="M4 20h16"/></svg>
+    <h2 id="jd-title">Drop your ROM here to join</h2>
+    <p>Drag your Zombies Ate My Neighbors (USA) file (.sfc or .smc) anywhere onto this page. It stays in your browser and is never uploaded.</p>
+    <div class="toolbar" style="justify-content:center">
+      <button class="btn primary big" id="jd-saved" type="button" hidden>Use my saved ROM</button>
+      <label class="btn big file-btn" id="jd-choose" tabindex="0">Choose ROM file<input type="file" id="jd-file" accept=".sfc,.smc,.bin,application/octet-stream"></label>
+    </div>
+    <p class="jd-error" id="jd-error" role="alert" hidden></p>
+    <button class="linklike" id="jd-dismiss" type="button">Play on my own instead</button>
+  </div>
+</div>
 
 <div id="toast" role="status" hidden></div>
 

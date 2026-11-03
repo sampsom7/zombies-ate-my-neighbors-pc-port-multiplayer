@@ -270,8 +270,20 @@ async function boot(flags = flagsOf(settings), cheats = settings.cheats) {
   return m;
 }
 
+// A ROM file, from the picker, a drop or the browser's saved copy. True if the
+// game started with it.
 async function loadRom(bytes, remember) {
+  // Some cartridge readers and older copiers put a 512-byte header in front of
+  // the image (.smc files); the game is what follows it.
+  if (bytes.length % 1024 === 512) bytes = bytes.subarray(512);
   const sha = await sha1(bytes);
+  // Joining someone needs the same file they have, so a wrong one is turned
+  // away here, with a reason, rather than by the host a moment later.
+  if (net.pendingJoin && sha && sha !== KNOWN_SHA1) {
+    joinDropError("That file isn't the Zombies Ate My Neighbors (USA) ROM, so it can't join your friend's game. " +
+                  "Check you picked the right file, and that the cartridge is the North American release.");
+    return false;
+  }
   rom = bytes;
   romCrc = crc32(bytes);
   $("rom-name").textContent = sha === KNOWN_SHA1
@@ -282,13 +294,37 @@ async function loadRom(bytes, remember) {
   try {
     await boot();
   } catch (err) {
-    toast(err.message, 6000);
-    return;
+    if (net.pendingJoin) joinDropError(err.message); else toast(err.message, 6000);
+    return false;
   }
+  closeJoinDrop();
   $("insert").hidden = true;
   $("screen-wrap").dataset.live = "1";
   document.body.dataset.rom = "1";
   if (net.pendingJoin) joinGame(net.pendingJoin);
+  return true;
+}
+
+// The invite prompt: what someone arriving from an invite link sees first.
+function openJoinDrop(code, haveSaved) {
+  $("jd-code").textContent = code;
+  $("jd-saved").hidden = !haveSaved;
+  $("jd-choose").classList.toggle("primary", !haveSaved);
+  $("jd-error").hidden = true;
+  $("join-drop").hidden = false;
+  (haveSaved ? $("jd-saved") : $("jd-choose")).focus();
+}
+function closeJoinDrop() { $("join-drop").hidden = true; }
+function joinDropError(text) {
+  $("jd-error").textContent = text;
+  $("jd-error").hidden = false;
+  $("join-drop").hidden = false;
+}
+
+async function romFromFile(f) {
+  if (!f) return;
+  await audioStart();
+  loadRom(new Uint8Array(await f.arrayBuffer()), true);
 }
 
 async function sha1(bytes) {
@@ -660,24 +696,37 @@ function needsRestart() {
 
 async function main() {
   bindSettings();
-  $("rom-file").addEventListener("change", async (e) => {
-    const f = e.target.files[0];
-    if (!f) return;
-    await audioStart();
-    loadRom(new Uint8Array(await f.arrayBuffer()), true);
+  $("rom-file").addEventListener("change", (e) => { romFromFile(e.target.files[0]); e.target.value = ""; });
+  $("jd-choose").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("jd-file").click(); }
   });
-  const drop = $("screen-wrap");
-  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.dataset.drag = "1"; });
-  drop.addEventListener("dragleave", () => { delete drop.dataset.drag; });
-  drop.addEventListener("drop", async (e) => {
-    e.preventDefault(); delete drop.dataset.drag;
-    const f = e.dataTransfer.files[0];
-    if (f) { await audioStart(); loadRom(new Uint8Array(await f.arrayBuffer()), true); }
+  $("jd-file").addEventListener("change", (e) => { romFromFile(e.target.files[0]); e.target.value = ""; });
+  // A ROM can be dropped anywhere on the page. `depth` counts the enter/leave
+  // pairs that children fire, so the highlight goes only when the drag leaves
+  // the window.
+  let depth = 0;
+  const hasFile = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+  window.addEventListener("dragenter", (e) => { if (hasFile(e)) { depth++; document.body.dataset.drag = "1"; } });
+  window.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; delete document.body.dataset.drag; } });
+  window.addEventListener("dragover", (e) => { if (hasFile(e)) e.preventDefault(); });
+  window.addEventListener("drop", (e) => {
+    if (!hasFile(e)) return;
+    e.preventDefault();
+    depth = 0; delete document.body.dataset.drag;
+    romFromFile(e.dataTransfer.files[0]);
   });
-  $("btn-resume").addEventListener("click", async () => {
+  const useSaved = async () => {
     await audioStart();
     const saved = await fileGet("rom");
     if (saved) loadRom(new Uint8Array(saved), false);
+    else joinDropError("There's no saved ROM in this browser any more. Choose the file instead.");
+  };
+  $("btn-resume").addEventListener("click", useSaved);
+  $("jd-saved").addEventListener("click", useSaved);
+  $("jd-dismiss").addEventListener("click", () => {
+    closeJoinDrop();
+    net.pendingJoin = null;
+    setNetStatus("Offline", "");
   });
   // Browsers start sound only after a click or a key.
   const wake = () => { if (machine) audioStart(); };
@@ -735,7 +784,9 @@ async function main() {
     $("join-code").value = net.pendingJoin;
     setNetStatus(`Load your ROM to join room ${net.pendingJoin}.`, "wait");
   }
-  if (await fileGet("rom")) $("btn-resume").hidden = false;
+  const haveSaved = !!(await fileGet("rom"));
+  if (haveSaved) $("btn-resume").hidden = false;
+  if (net.pendingJoin) openJoinDrop(net.pendingJoin, haveSaved);
   requestAnimationFrame(loop);
 }
 
