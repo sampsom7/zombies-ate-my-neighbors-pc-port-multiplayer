@@ -1,0 +1,36 @@
+# Publishes the browser version (web/) to GitHub Pages on every push to main.
+# Turn it on once: Settings > Pages > Build and deployment > Source: GitHub Actions.
+name: Deploy browser version
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collect the page
+        run: |
+          mkdir -p _site
+          cp web/index.html web/app.js web/zamn-core.js web/net.js web/zamn.wasm _site/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

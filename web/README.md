@@ -27,8 +27,10 @@ Two players on one computer: the keyboard and the first controller are player
    - **Netlify Drop**: drag the `web` folder onto <https://app.netlify.com/drop>.
    - **itch.io**: zip the *contents* of `web`, create an HTML project, upload the
      zip, tick "This file will be played in the browser".
-   - **GitHub Pages**: push the contents of `web` to a branch and turn Pages on
-     for it.
+   - **GitHub Pages**: this repository deploys `web` itself
+     (`.github/workflows/pages.yml`). Turn it on once under Settings > Pages >
+     Source: **GitHub Actions**; every push to `main` then updates
+     `https://<you>.github.io/<repo>/`.
 2. Open your page, load your ROM, and click **Host a game**.
 3. Send your friend the invite link. They open it, load their own copy of the
    ROM, and are dropped straight into your game as player 2, even mid-level.
