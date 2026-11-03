@@ -210,6 +210,25 @@ function aimNibble(dpad) {
          (((dpad >> BTN.LEFT) & 1) << 2) | (((dpad >> BTN.RIGHT) & 1) << 3);
 }
 
+// A d-pad reported as one "hat" axis, as many SNES-style USB pads do when the
+// browser has no standard mapping for them: eight positions from -1 (up)
+// clockwise in steps of 2/7, and a value past 1 when centred.
+function hatBits(v) {
+  if (v === undefined || Math.abs(v) > 1.05) return 0;
+  const pos = Math.round((v + 1) / (2 / 7)) & 7;
+  const dirs = [[BTN.UP], [BTN.UP, BTN.RIGHT], [BTN.RIGHT], [BTN.RIGHT, BTN.DOWN],
+                [BTN.DOWN], [BTN.DOWN, BTN.LEFT], [BTN.LEFT], [BTN.LEFT, BTN.UP]][pos];
+  let m = 0;
+  for (const b of dirs) m |= 1 << b;
+  return m;
+}
+
+function padName(p) {
+  const id = p.id.replace(/\(.*?\)/g, "").replace(/\s+/g, " ").trim();
+  return id.length > 34 ? id.slice(0, 32) + "…" : id || "Controller";
+}
+
+// Every connected controller, in the order the browser numbers them.
 function padWords() {
   const out = [];
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -223,12 +242,15 @@ function padWords() {
       else if (i in PAD_BTN) w |= 1 << PAD_BTN[i];
     });
     w |= stickBits(p.axes[0] || 0, p.axes[1] || 0);
-    const aim = settings.twinStick ? aimNibble(stickBits(p.axes[2] || 0, p.axes[3] || 0)) : 0;
-    out.push({ w, c, aim });
+    if (p.mapping !== "standard") w |= hatBits(p.axes[9]);
+    const aim = settings.twinStick && p.axes.length >= 4 ? aimNibble(stickBits(p.axes[2] || 0, p.axes[3] || 0)) : 0;
+    out.push({ w, c, aim, name: padName(p), index: p.index });
   }
   return out;
 }
-window.addEventListener("gamepadconnected", (e) => toast(`Controller connected: ${e.gamepad.id.split("(")[0].trim()}`));
+window.addEventListener("gamepadconnected", (e) => { toast(`Controller connected: ${padName(e.gamepad)}`); padsSeen = true; });
+window.addEventListener("gamepaddisconnected", (e) => toast(`Controller disconnected: ${padName(e.gamepad)}`));
+let padsSeen = false;
 
 // The cycle bits are presses, not holds: a word carries one only on the frame
 // the button went down.
@@ -242,17 +264,77 @@ function word(src) {
 // This browser's controllers as the two players' words. Offline the keyboard
 // and the first pad are player 1 and the second pad is player 2; online
 // everything here is the one local player.
+//
+// Offline: the first controller is player 1 and the second player 2, or the
+// other way round with "Swap"; the keyboard joins whichever player the setting
+// says. Online: everything on this computer is the one local player.
+function assignment(pads) {
+  const first = settings.padSwap ? 1 : 0;
+  const slot = [[], []];
+  if (pads[0]) slot[first].push(pads[0]);
+  if (pads[1]) slot[1 - first].push(pads[1]);
+  for (let i = 2; i < pads.length; i++) slot[0].push(pads[i]); // a third pad helps player 1
+  return slot;
+}
+
+let lastSample = null;
 function sampleLocal() {
   const kb = keyboardWord(), pads = padWords();
+  const merge = (list, withKb) => {
+    let w = withKb ? kb.w : 0, c = withKb ? kb.c : 0, aim = 0;
+    for (const p of list) { w |= p.w; c |= p.c; aim = aim || p.aim; }
+    return { w, c, aim };
+  };
+  let out;
   if (net.mode === "play") {
-    let w = kb.w, c = kb.c, aim = 0;
-    for (const p of pads) { w |= p.w; c |= p.c; aim = aim || p.aim; }
-    return [(word({ w, aim })) | (edge(0, c) << CYCLE_SHIFT), 0];
+    const me = merge(pads, true);
+    out = [word(me) | (edge(0, me.c) << CYCLE_SHIFT), 0];
+    lastSample = { pads, words: [me.w | me.c, 0] };
+  } else {
+    const slot = assignment(pads);
+    const kbTo = settings.kbPlayer === 2 ? 1 : 0;
+    const a = merge(slot[0], kbTo === 0), b = merge(slot[1], kbTo === 1);
+    out = [word(a) | (edge(0, a.c) << CYCLE_SHIFT), word(b) | (edge(1, b.c) << CYCLE_SHIFT)];
+    lastSample = { pads, words: [a.w | a.c | a.aim, b.w | b.c | b.aim] };
   }
-  const p1 = { w: kb.w | (pads[0]?.w || 0), aim: pads[0]?.aim || 0 };
-  const c1 = kb.c | (pads[0]?.c || 0);
-  const p2 = pads[1] || { w: 0, c: 0, aim: 0 };
-  return [word(p1) | (edge(0, c1) << CYCLE_SHIFT), word(p2) | (edge(1, p2.c) << CYCLE_SHIFT)];
+  return out;
+}
+
+// The Controllers panel: who is holding what, refreshed a few times a second.
+let panelTick = 0;
+function updatePadPanel() {
+  if (++panelTick % 8) return;
+  const pads = lastSample?.pads || padWords();
+  const words = lastSample?.words || [0, 0];
+  const online = net.mode === "play";
+  const mine = net.role === "guest" ? 1 : 0;
+  const labels = [[], []];
+  if (online) {
+    labels[mine] = ["Keyboard", ...pads.map((p) => p.name)];
+    labels[1 - mine] = ["Your friend"];
+  } else {
+    const slot = assignment(pads);
+    const kbTo = settings.kbPlayer === 2 ? 1 : 0;
+    for (let i = 0; i < 2; i++) {
+      labels[i] = slot[i].map((p) => p.name);
+      if (kbTo === i) labels[i].unshift("Keyboard");
+      if (!labels[i].length) labels[i] = [i === 1 ? "No controller yet" : "Nothing assigned"];
+    }
+  }
+  for (let i = 0; i < 2; i++) {
+    const text = labels[i].join(" + ");
+    if ($("slot" + (i + 1) + "-dev").textContent !== text) $("slot" + (i + 1) + "-dev").textContent = text;
+    const live = online ? (i === mine ? words[0] : 0) : words[i];
+    $("slot" + (i + 1)).dataset.live = live ? "1" : "0";
+    $("slot" + (i + 1)).dataset.empty = /^(No controller|Nothing)/.test(text) ? "1" : "0";
+  }
+  $("pad-hint").textContent = pads.length
+    ? (online ? "Online, every controller on this computer plays as you." : pads.length === 1
+        ? "Plug in a second controller for player 2, then press a button on it."
+        : "Hold a button to see which player it controls.")
+    : "Press any button on a controller to connect it. Browsers only show a controller once it's pressed.";
+  $("btn-swap").disabled = online;
+  $("set-kb").disabled = online;
 }
 
 // --- the machine ----------------------------------------------------------------------
@@ -616,7 +698,7 @@ function loop(now) {
   let dt = now - last;
   last = now;
   if (dt > 250) dt = FRAME_MS;
-  if (!machine || paused) { acc = 0; return; }
+  if (!machine || paused) { acc = 0; if (!machine) { lastSample = null; updatePadPanel(); } return; }
   if (net.mode === "hosting" && net.conn === null) {} // waiting for a friend: play on
   if (net.mode === "sync") {
     if (net.role === "host" && net.wantSync && net.conn) hostSync();
@@ -647,6 +729,7 @@ function loop(now) {
     } else { net.stallSince = 0; $("waiting").hidden = true; }
   }
   if (ran) draw();
+  updatePadPanel();
 }
 
 // --- page wiring ---------------------------------------------------------------------------
@@ -679,6 +762,14 @@ function bindSettings() {
     settings.volume = +vol.value;
     store.set("settings", settings);
     if (audio.gain) audio.gain.gain.value = settings.volume / 100;
+  });
+  const kbSel = $("set-kb");
+  kbSel.value = String(settings.kbPlayer === 2 ? 2 : 1);
+  kbSel.addEventListener("change", () => { settings.kbPlayer = +kbSel.value; store.set("settings", settings); });
+  $("btn-swap").addEventListener("click", () => {
+    settings.padSwap = !settings.padSwap;
+    store.set("settings", settings);
+    toast(settings.padSwap ? "First controller is now player 2" : "First controller is now player 1");
   });
   const sharp = $("set-sharp");
   sharp.checked = settings.sharp;
