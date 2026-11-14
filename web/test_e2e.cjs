@@ -58,10 +58,10 @@ const shot = (p, n) => p.screenshot({ path: `./${n}.png` });
     console.log(n, await p.evaluate(() => ({ f: window.zamn.net.f, checks: window.zamn.net.checks, desyncs: window.zamn.net.desyncs || 0 })));
   // Guest leaves; host carries on alone.
   await guest.click("#btn-leave");
-  await host.waitForFunction(() => window.zamn.net.mode === "off", null, { timeout: 15000 });
+  await host.waitForFunction(() => window.zamn.net.mode === "hosting", null, { timeout: 15000 });  // the room stays open
   const f2 = await host.evaluate(() => window.zamn.machine.frameCount);
   await host.waitForTimeout(500);
   const f3 = await host.evaluate(() => window.zamn.machine.frameCount);
-  console.log(`after guest left, host status "${await host.textContent("#net-status")}", still running: ${f3 > f2}`);
+  console.log(`after guest left, host (room reopened) status "${await host.textContent("#net-status")}", still running: ${f3 > f2}`);
   await b1.close(); await b2.close();
 })().catch((e) => { console.error(e); process.exit(1); });
