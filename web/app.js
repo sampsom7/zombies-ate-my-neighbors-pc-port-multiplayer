@@ -15,6 +15,7 @@
 
 import { Machine, FLAG, CHEATS, BTN, AIM_SHIFT, CYCLE_SHIFT, crc32 } from "./zamn-core.js";
 import { Peer, PUBLIC_BROKER } from "./net.js";
+import { Lobby } from "./lobby.js";
 
 const PROTO = 1;
 const FPS = 60.0988;        // the SNES's NTSC frame rate
@@ -457,12 +458,18 @@ const net = {
   myHash: new Map(), theirHash: new Map(),
   rtt: 0, stallSince: 0, pendingJoin: null, wantSync: false,
   broker: PUBLIC_BROKER, startMsg: null, incoming: null, got: 0,
+  code: null, partner: "", haveSavedRom: false,
 };
+let lobby = null;
 const STATE_CHUNK = 16384;
 
 function setNetStatus(text, state) {
   $("net-status").textContent = text;
   $("net-status").dataset.state = state || "";
+}
+
+function myName() {
+  return (settings.name || "").trim() || "A neighbor";
 }
 
 function randomId() {
@@ -481,11 +488,15 @@ function hostGame() {
   net.role = "host";
   net.peer.on("open", () => {
     net.mode = "hosting";
+    net.code = code;
     const link = location.origin + location.pathname + "?join=" + code;
     $("invite-link").value = link;
     $("invite-code").textContent = code;
     $("invite").hidden = false;
-    setNetStatus("Room open. Send the link to a friend.", "wait");
+    const listed = $("set-public").checked;
+    if (listed) lobby?.host({ code, name: `${myName()}'s game`, host: myName(), status: "open", build: buildId });
+    setNetStatus(listed ? "Room open and listed in the lobby. You can also send the link."
+                        : "Room open. Send the link to a friend.", "wait");
     syncButtons();
   });
   net.peer.on("connection", (conn) => {
@@ -498,7 +509,12 @@ function hostGame() {
 function joinGame(code) {
   code = String(code).trim().toLowerCase().replace(/^.*join=/, "").replace(ID_PREFIX, "");
   if (!code) return;
-  if (!machine) { net.pendingJoin = code; setNetStatus(`Load your ROM to join room ${code}.`, "wait"); return; }
+  if (!machine) {
+    net.pendingJoin = code;
+    setNetStatus(`Load your ROM to join room ${code}.`, "wait");
+    openJoinDrop(code, net.haveSavedRom);
+    return;
+  }
   net.pendingJoin = null;
   if (net.peer) return;
   net.role = "guest";
@@ -519,11 +535,15 @@ function peerError(err) {
 function attach(conn) {
   net.conn = conn;
   conn.on("open", () => {
-    if (net.role === "guest") conn.send({ t: "hello", proto: PROTO, rom: romCrc, build: buildId });
+    if (net.role === "guest") conn.send({ t: "hello", proto: PROTO, rom: romCrc, build: buildId, name: myName() });
     else setNetStatus("A friend is connecting…", "busy");
   });
   conn.on("data", onData);
-  conn.on("close", () => { if (net.conn === conn) { toast("Your partner left. The game carries on offline.", 4000); leave(true); } });
+  conn.on("close", () => {
+    if (net.conn !== conn) return;
+    if (net.role === "host" && net.peer) { toast(`${net.partner || "Your partner"} left. Your room stays open.`, 4000); reopenRoom(); }
+    else { toast(`${net.partner || "Your partner"} left. The game carries on offline.`, 4000); leave(true); }
+  });
   conn.on("error", (e) => { console.warn("connection:", e); setNetStatus(e.message, "bad"); });
 }
 
@@ -542,7 +562,9 @@ function onData(m) {
     case "hello": // host
       if (m.proto !== PROTO || m.build !== buildId) return reject("Your friend is running a different version of the page. Both of you should reload it.");
       if (m.rom !== romCrc) return reject("Your ROMs are different files. Both players need the same USA ROM.");
-      setNetStatus("Measuring the connection…", "busy");
+      net.partner = String(m.name || "").slice(0, 20);
+      lobby?.update({ status: "full" });
+      setNetStatus(`${net.partner || "A friend"} is joining…`, "busy");
       pings.length = 0;
       for (let i = 0; i < 6; i++) setTimeout(() => net.conn?.send({ t: "ping", s: performance.now() }), i * 120);
       break;
@@ -560,6 +582,7 @@ function onData(m) {
     case "reject": setNetStatus(m.why, "bad"); leave(false); break;
     case "start":
       net.mode = "sync";
+      net.partner = String(m.name || "").slice(0, 20);
       net.startMsg = m;
       net.incoming = new Uint8Array(m.stateLen);
       net.got = 0;
@@ -578,9 +601,25 @@ function onData(m) {
   }
 }
 
+// Host: the guest went away, but the room stays up for the next one.
+function reopenRoom() {
+  try { net.conn?.close(); } catch {}
+  net.conn = null;
+  net.partner = "";
+  net.mode = "hosting";
+  net.wantSync = false;
+  $("waiting").hidden = true;
+  $("invite").hidden = false;
+  lobby?.update({ status: "open" });
+  setNetStatus("Room open. Waiting for someone to join.", "wait");
+  syncButtons();
+}
+
 function reject(why) {
   net.conn.send({ t: "reject", why });
-  setNetStatus("A friend tried to join: " + why, "bad");
+  setNetStatus("Someone tried to join: " + why, "bad");
+  net.mode = "hosting";
+  lobby?.update({ status: "open" });
   const c = net.conn;
   net.conn = null;
   setTimeout(() => c.close(), 500);
@@ -592,7 +631,7 @@ function hostSync() {
   if (!s) { const [a, b] = sampleLocal(); machine.frame(a, b); audioFrame(); return; }
   net.wantSync = false;
   net.epoch++;
-  net.conn.send({ t: "start", e: net.epoch, flags: machine.flags, cheats: machine.cheats,
+  net.conn.send({ t: "start", e: net.epoch, flags: machine.flags, cheats: machine.cheats, name: myName(),
                   delay: net.delay, rtt: net.rtt, stateLen: s.length });
   for (let at = 0; at < s.length; at += STATE_CHUNK) net.conn.send(s.subarray(at, at + STATE_CHUNK));
   setNetStatus("Sending the game to your friend…", "busy");
@@ -624,7 +663,7 @@ function beginLockstep() {
   paused = false;
   $("paused").hidden = true;
   $("invite").hidden = true;
-  setNetStatus(`Playing online as player ${net.role === "host" ? 1 : 2}`, "good");
+  setNetStatus(`Playing with ${net.partner || "a friend"} · you are player ${net.role === "host" ? 1 : 2}`, "good");
   syncButtons();
 }
 
@@ -669,6 +708,9 @@ function checkHash(f) {
 }
 
 function leave(keepPlaying) {
+  if (net.role === "host") lobby?.unhost();
+  net.code = null;
+  net.partner = "";
   const c = net.conn, p = net.peer;
   net.conn = null; net.peer = null;
   net.mode = "off"; net.role = null;
@@ -682,13 +724,51 @@ function leave(keepPlaying) {
 
 function syncButtons() {
   const online = net.mode !== "off" || net.peer;
-  $("btn-host").hidden = !!online;
-  $("join-form").hidden = !!online;
+  $("host-row").hidden = !!online;
+  $("join-more").hidden = !!online;
   $("btn-leave").hidden = !online;
   document.querySelectorAll("[data-setting]").forEach((el) => { el.disabled = net.role === "guest"; });
   $("net-meta").textContent = net.mode === "play"
     ? `Round trip ${Math.round(net.rtt)} ms · input delay ${net.delay} frames`
     : "";
+  renderLobby();
+}
+
+// --- the lobby list -----------------------------------------------------------------------
+function renderLobby() {
+  const list = $("lobby-list");
+  if (!lobby) return;
+  const rooms = [...lobby.rooms].sort((a, b) =>
+    (a.status === "open" ? 0 : 1) - (b.status === "open" ? 0 : 1) || b.since - a.since);
+  const state = lobby.state === "connecting" ? "Connecting…"
+    : `${lobby.online} ${lobby.online === 1 ? "player" : "players"} here`;
+  $("lobby-state").textContent = state;
+  $("lobby-state").dataset.state = lobby.state;
+  const busy = net.mode !== "off" || !!net.peer;
+  list.replaceChildren(...rooms.map((r) => {
+    const li = document.createElement("li");
+    li.className = "room";
+    li.dataset.status = r.status;
+    const mine = r.code === net.code && net.role === "host";
+    const other = r.build !== buildId;
+    const label = document.createElement("div");
+    label.className = "room-label";
+    const name = document.createElement("strong");
+    name.textContent = r.name;
+    const sub = document.createElement("span");
+    sub.textContent = mine ? "Your room" : other ? "Different version of the page" : r.status === "full" ? "Playing, 2 of 2" : "Waiting for player 2";
+    label.append(name, sub);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn" + (!mine && !other && r.status === "open" && !busy ? " primary" : "");
+    btn.textContent = mine ? "Yours" : r.status === "full" ? "Full" : "Join";
+    btn.disabled = mine || other || r.status === "full" || busy;
+    btn.title = other ? "This room runs another version. Reload both pages." : "";
+    btn.addEventListener("click", () => { audioStart(); joinGame(r.code); });
+    li.append(label, btn);
+    return li;
+  }));
+  $("lobby-empty").hidden = rooms.length > 0 || lobby.state === "connecting";
 }
 
 // --- the loop -------------------------------------------------------------------------
@@ -763,6 +843,17 @@ function bindSettings() {
     store.set("settings", settings);
     if (audio.gain) audio.gain.gain.value = settings.volume / 100;
   });
+  const nameEl = $("set-name");
+  if (!settings.name) { settings.name = "Neighbor " + Math.floor(100 + Math.random() * 900); store.set("settings", settings); }
+  nameEl.value = settings.name;
+  nameEl.addEventListener("change", () => {
+    settings.name = nameEl.value.trim().slice(0, 20);
+    store.set("settings", settings);
+    if (net.role === "host") lobby?.update({ name: `${myName()}'s game`, host: myName() });
+  });
+  const pub = $("set-public");
+  pub.checked = settings.listRooms !== false;
+  pub.addEventListener("change", () => { settings.listRooms = pub.checked; store.set("settings", settings); });
   const kbSel = $("set-kb");
   kbSel.value = String(settings.kbPlayer === 2 ? 2 : 1);
   kbSel.addEventListener("change", () => { settings.kbPlayer = +kbSel.value; store.set("settings", settings); });
@@ -876,6 +967,9 @@ async function main() {
     setNetStatus(`Load your ROM to join room ${net.pendingJoin}.`, "wait");
   }
   const haveSaved = !!(await fileGet("rom"));
+  net.haveSavedRom = haveSaved;
+  lobby = new Lobby(net.broker, renderLobby);
+  lobby.start();
   if (haveSaved) $("btn-resume").hidden = false;
   if (net.pendingJoin) openJoinDrop(net.pendingJoin, haveSaved);
   requestAnimationFrame(loop);
@@ -884,4 +978,4 @@ async function main() {
 main().catch((err) => { console.error(err); toast(err.message, 10000); });
 
 // For the browser console and the automated test: the live machine and session.
-window.zamn = { net, get machine() { return machine; } };
+window.zamn = { net, get machine() { return machine; }, get lobby() { return lobby; } };

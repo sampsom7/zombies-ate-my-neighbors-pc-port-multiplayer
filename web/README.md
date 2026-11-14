@@ -35,6 +35,13 @@ Two players on one computer: the keyboard and the first controller are player
 3. Send your friend the invite link. They open it, load their own copy of the
    ROM, and are dropped straight into your game as player 2, even mid-level.
 
+Or skip the link: games you host are listed in the **lobby** on the page
+(unless you untick "List it in the lobby"), and anyone on the site can join
+one with a click. The lobby needs no server either. The first browser on the
+site keeps the list of open games, the others connect to it, and when that
+browser closes another one takes over within a few seconds. When your
+partner leaves, your room goes back to "waiting" for the next player.
+
 How it works: the game is deterministic, so the two browsers send each other
 only controller input (lockstep), and each runs a frame once it has both
 players' input for it. Input is scheduled a few frames ahead, chosen from the
@@ -85,5 +92,6 @@ node web/test_wasm.mjs rom.sfc                                      # wasm match
 | `index.html`, `app.js` | the page: picture, sound, controls, settings, the netplay session |
 | `zamn-core.js` | loads `zamn.wasm` and wraps its exports |
 | `net.js` | WebRTC links and PeerJS-protocol signaling, with no library |
+| `lobby.js` | the lobby: a list of open games kept by one of the players' browsers |
 | `server.mjs` | static server + signaling broker, no dependencies |
 | `zamn.wasm` | the game, built from `src/` by `build.sh` |

@@ -140,6 +140,25 @@ footer code { font-family: var(--font-mono); }
 .pad-actions select { background: var(--night); border: 1px solid var(--rule); border-radius: 6px; padding: 6px 8px; font-size: 13px; }
 .btn:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.field { display: grid; gap: 4px; font-size: 13px; color: var(--dim); }
+.field input { background: var(--night); border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; color: var(--ink); font-size: 14px; min-width: 0; }
+.host-row { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.host-row .check { font-size: 13px; color: var(--dim); }
+.lobby { display: grid; gap: 8px; border-top: 1px solid var(--rule); padding-top: 12px; }
+.lobby-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+#h-lobby { font: 700 12px/1 var(--font-body); letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
+#lobby-state { font: 12px var(--font-mono); color: var(--dim); }
+#lobby-state[data-state="keeper"]::before, #lobby-state[data-state="member"]::before { content: "● "; color: var(--slime); }
+#lobby-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 280px; overflow-y: auto; }
+.room { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center;
+  padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; background: var(--night); }
+.room-label { display: grid; gap: 2px; min-width: 0; }
+.room-label strong { font-size: 14px; overflow-wrap: anywhere; }
+.room-label span { font-size: 12px; color: var(--dim); }
+.room[data-status="open"] .room-label span::before { content: "● "; color: var(--slime); }
+.room .btn { padding: 6px 12px; }
+details#join-more summary { color: var(--dim); font-size: 13px; font-weight: 600; }
+
 /* The invite prompt: the whole window is the drop target. */
 #join-drop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center;
   padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px))
@@ -200,6 +219,9 @@ body[data-drag] #screen-wrap { box-shadow: 0 0 0 3px var(--slime); }
   <aside>
     <section class="box" aria-labelledby="h-online">
       <h3 id="h-online">Online play</h3>
+      <label class="field" for="set-name"><span>Your name</span>
+        <input type="text" id="set-name" maxlength="20" autocomplete="nickname" spellcheck="false">
+      </label>
       <p id="net-status">Offline</p>
       <p id="net-meta"></p>
       <div id="invite" hidden>
@@ -209,14 +231,27 @@ body[data-drag] #screen-wrap { box-shadow: 0 0 0 3px var(--slime); }
           <input type="text" id="invite-link" readonly aria-label="Invite link">
           <button class="btn" id="btn-copy" type="button">Copy</button>
         </div>
-        <p class="hint">Your friend opens this link and loads their own copy of the ROM. You can keep playing until they arrive.</p>
+        <p class="hint">Anyone can join from the lobby, or you can send this link. You can keep playing until someone arrives.</p>
       </div>
-      <button class="btn primary" id="btn-host" type="button">Host a game</button>
-      <form id="join-form" class="row">
-        <input type="text" id="join-code" placeholder="Room code or link" aria-label="Room code" autocomplete="off">
-        <button class="btn" type="submit">Join</button>
-      </form>
+      <div class="host-row" id="host-row">
+        <button class="btn primary" id="btn-host" type="button">Host a game</button>
+        <label class="check"><input type="checkbox" id="set-public"><span>List it in the lobby</span></label>
+      </div>
       <button class="btn" id="btn-leave" type="button" hidden>Leave online game</button>
+
+      <div class="lobby" aria-labelledby="h-lobby">
+        <div class="lobby-head"><span id="h-lobby">Lobby</span><span id="lobby-state" data-state="connecting">Connecting…</span></div>
+        <ul id="lobby-list" aria-live="polite"></ul>
+        <p class="hint" id="lobby-empty" hidden>No open games right now. Host one and it shows up here for everyone on the site.</p>
+      </div>
+
+      <details id="join-more">
+        <summary>Join with a code</summary>
+        <form id="join-form" class="row">
+          <input type="text" id="join-code" placeholder="Room code or link" aria-label="Room code" autocomplete="off">
+          <button class="btn" type="submit">Join</button>
+        </form>
+      </details>
       <p class="hint">The host is player 1, the guest player 2. Both of you need the same ROM.</p>
     </section>
 

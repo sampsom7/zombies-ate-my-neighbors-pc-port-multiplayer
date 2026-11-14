@@ -27,7 +27,7 @@ jobs:
       - name: Collect the page
         run: |
           mkdir -p _site
-          cp web/index.html web/app.js web/zamn-core.js web/net.js web/zamn.wasm _site/
+          cp web/index.html web/*.js web/zamn.wasm _site/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
